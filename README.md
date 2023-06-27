@@ -5,8 +5,8 @@
 * Hardware:  
 Cambrian MLU 270
 * Software:  
-cncc v2.15.2
-cnrt 4.10.1
+cncc v2.15.2  
+cnrt 4.10.1  
 
 ### Examples:  
 #### Run ``MultiAdd``:  
