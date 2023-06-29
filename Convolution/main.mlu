@@ -313,6 +313,9 @@ void initHostData(Convolution &convolution, ShapeParam &shape_param, float *inpu
     {
         convolution.bias_data.host_data = (float *)malloc(convolution.bias_data.fp_size);
     }
+    // !!! 申请 output_data
+    convolution.output_data.host_data = (float *)malloc(convolution.output_data.fp_size);
+
     // 赋值
     for (int i = 0; i < shape_param.input.size(); i++)
     {
@@ -410,11 +413,11 @@ void initDeviceData(Convolution &convolution, ShapeParam &shape_param)
 void convolutionComputeDevice(cnnlHandle_t &handle, cnrtQueue_t &queue, Convolution &conv)
 {
     // mlu compute start
-    std::cout << "Begin compute:\n";
-    cnrtNotifier_t start = nullptr, end = nullptr;
-    cnrtCreateNotifier(&start);
-    cnrtCreateNotifier(&end);
-    cnrtPlaceNotifier(start, queue);
+    std::cout << "Begin compute.\n";
+    // cnrtNotifier_t start = nullptr, end = nullptr;
+    // cnrtCreateNotifier(&start);
+    // cnrtCreateNotifier(&end);
+    // cnrtPlaceNotifier(start, queue);
     // call convolutionForward interface
 
     CNNL_CHECK(cnnlConvolutionForward(handle, conv.conv_desc, conv.algo, nullptr, conv.input_desc,
@@ -422,13 +425,16 @@ void convolutionComputeDevice(cnnlHandle_t &handle, cnrtQueue_t &queue, Convolut
                                       conv.bias_desc, conv.bias_data.device_data, conv.workspace, conv.workspace_size,
                                       nullptr, conv.output_desc, conv.output_data.device_data));
 
-    CNRT_CHECK(cnrtPlaceNotifier(end, queue));
+    std::cout << "End compute.\n";
+    // CNRT_CHECK(cnrtPlaceNotifier(end, queue));
+    std::cout << "Begin synchronization.\n";
     CNRT_CHECK(cnrtSyncQueue(queue));
+    std::cout << "End synchronization.\n";
     // mlu compute end
     // CNRT_CHECK(cnrtNotifierDuration(start, end, &(conv.hardware_time)));
 
-    CNRT_CHECK(cnrtDestroyNotifier(&start));
-    CNRT_CHECK(cnrtDestroyNotifier(&end));
+    // CNRT_CHECK(cnrtDestroyNotifier(&start));
+    // CNRT_CHECK(cnrtDestroyNotifier(&end));
 }
 /**
  * @brief 打印结果
@@ -437,9 +443,13 @@ void convolutionComputeDevice(cnnlHandle_t &handle, cnrtQueue_t &queue, Convolut
 void printResults(Convolution &conv, cnrtQueue_t &queue, ShapeParam &shape_param)
 {
 
-    CNRT_CHECK(cnrtMemcpy(conv.output_data.host_data, conv.output_data.device_data, conv.output_data.fp_size,
-                          CNRT_MEM_TRANS_DIR_DEV2HOST));
     std::cout << "----- Print Results -----\n";
+    std::cout << "Begin copy data from device to host.\n";
+    CNRT_CHECK(cnrtMemcpyAsync(conv.output_data.host_data, conv.output_data.device_data, conv.output_data.fp_size,
+                               queue, CNRT_MEM_TRANS_DIR_DEV2HOST));
+    CNRT_CHECK(cnrtSyncQueue(queue));
+    std::cout << "End copy data from device to host.\n";
+
     for (int i = 0; i < shape_param.output.size(); i++)
     {
         std::cout << conv.output_data.host_data[i];
