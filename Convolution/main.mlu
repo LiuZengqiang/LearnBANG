@@ -142,8 +142,11 @@ struct ShapeParam
  */
 struct DataTypeParam
 {
+    // input 只支持 int8, int16, int31
     cnnlDataType_t input_dtype;
+    // weight 只支持 int8, int16, int31
     cnnlDataType_t weight_dtype;
+    // output 只支持 half, float
     cnnlDataType_t output_dtype;
     // !!! 注意 这里数据的格式是 NHWC 不是 NCHW !!!
     cnnlTensorLayout_t layout = CNNL_LAYOUT_NHWC;
@@ -156,13 +159,12 @@ struct DataTypeParam
 struct DataAddress
 {
     // 如果不使用 定点量化技术， 就不需要 cpu_data, fp_data，只需要 host 和 device
-    float *cpu_data = nullptr; // repack quantized data used for cpu compute
-    float *fp_data = nullptr;  // store init random data
-
-    float *host_data = nullptr;   // store casted data
-    float *device_data = nullptr; // mlu device address
-    size_t mlu_size = 0;          // mlu malloc size
-    size_t fp_size = 0;           // cpu random data size
+    float *cpu_data = nullptr;   // repack quantized data used for cpu compute
+    float *fp_data = nullptr;    // store init random data
+    void *host_data = nullptr;   // store casted data
+    void *device_data = nullptr; // mlu device address
+    size_t mlu_size = 0;         // mlu malloc size
+    size_t fp_size = 0;          // cpu random data size
 };
 /**
  * @brief Convolution data structure
@@ -281,10 +283,10 @@ void initDescriptorAndWorkspace(cnnlHandle_t handle, Convolution &convolution, S
             return -1;
         }
     };
-    convolution.input_data.fp_size = shape_param.input.size() * sizeof(float);
+    convolution.input_data.fp_size = shape_param.input.size() * sizeof(int16_t);
     convolution.input_data.mlu_size = shape_param.input.size() * getDataSize(data_type_param.input_dtype);
 
-    convolution.weight_data.fp_size = shape_param.weight.size() * sizeof(float);
+    convolution.weight_data.fp_size = shape_param.weight.size() * sizeof(int16_t);
     convolution.weight_data.mlu_size = shape_param.weight.size() * getDataSize(data_type_param.weight_dtype);
 
     convolution.output_data.fp_size = shape_param.output.size() * sizeof(float);
@@ -303,12 +305,13 @@ void initDescriptorAndWorkspace(cnnlHandle_t handle, Convolution &convolution, S
  * @param weight_data
  * @param bias_data
  */
-void initHostData(Convolution &convolution, ShapeParam &shape_param, float *input_data, float *weight_data,
+void initHostData(Convolution &convolution, ShapeParam &shape_param, int16_t *input_data, int16_t *weight_data,
                   float *bias_data)
 {
     // 申请空间
-    convolution.input_data.host_data = (float *)malloc(convolution.input_data.fp_size);
-    convolution.weight_data.host_data = (float *)malloc(convolution.weight_data.fp_size);
+    convolution.input_data.host_data = (int16_t *)malloc(convolution.input_data.fp_size);
+    convolution.weight_data.host_data = (int16_t *)malloc(convolution.weight_data.fp_size);
+
     if (shape_param.has_bias)
     {
         convolution.bias_data.host_data = (float *)malloc(convolution.bias_data.fp_size);
@@ -319,18 +322,18 @@ void initHostData(Convolution &convolution, ShapeParam &shape_param, float *inpu
     // 赋值
     for (int i = 0; i < shape_param.input.size(); i++)
     {
-        convolution.input_data.host_data[i] = input_data[i];
+        ((int16_t *)(convolution.input_data.host_data))[i] = input_data[i];
     }
 
     for (int i = 0; i < shape_param.weight.size(); i++)
     {
-        convolution.weight_data.host_data[i] = weight_data[i];
+        ((int16_t *)(convolution.weight_data.host_data))[i] = weight_data[i];
     }
     if (shape_param.has_bias)
     {
         for (int i = 0; i < shape_param.bias.size(); i++)
         {
-            convolution.bias_data.host_data[i] = bias_data[i];
+            ((float *)(convolution.bias_data.host_data))[i] = bias_data[i];
         }
     }
 }
@@ -443,16 +446,16 @@ void convolutionComputeDevice(cnnlHandle_t &handle, cnrtQueue_t &queue, Convolut
 void printResults(Convolution &conv, cnrtQueue_t &queue, ShapeParam &shape_param)
 {
 
-    std::cout << "----- Print Results -----\n";
+    std::cout << "----- Print Output -----\n";
     std::cout << "Begin copy data from device to host.\n";
     CNRT_CHECK(cnrtMemcpyAsync(conv.output_data.host_data, conv.output_data.device_data, conv.output_data.fp_size,
                                queue, CNRT_MEM_TRANS_DIR_DEV2HOST));
     CNRT_CHECK(cnrtSyncQueue(queue));
     std::cout << "End copy data from device to host.\n";
-
+    std::cout << "Output:[";
     for (int i = 0; i < shape_param.output.size(); i++)
     {
-        std::cout << conv.output_data.host_data[i];
+        std::cout << ((float *)conv.output_data.host_data)[i];
         if (i == shape_param.output.size() - 1)
         {
             std::cout << "]\n";
@@ -462,7 +465,7 @@ void printResults(Convolution &conv, cnrtQueue_t &queue, ShapeParam &shape_param
             std::cout << ",";
         }
     }
-    std::cout << "----- Print Results -----\n";
+    std::cout << "-------------------------\n";
 }
 
 /**
@@ -518,12 +521,24 @@ void freeDeviceHost(cnnlHandle_t &handle, Convolution &conv, cnrtQueue_t &queue)
 
 int main(int, char **)
 {
+
+    /* !!!!! 数据类型注意事项 !!!!!*/
+    /* 根据 cambricon cnnl developer guide, convolutionForward 函数对input, weight, output
+    的数据类型有一定的要求(一下只列出 MLU200 series):
+    /* input(type id): int8(3), int16(4), int31(5)
+    /* weight/filter(type id): int8(3), int16(4), int 31(5)
+    /* bias(type id): half(1), float(2)
+    /* output(type id): half(1), float(2)
+    /* 另外，如果 group_count 等于 input channel,
+    /* 那么: input-weight-output 可以等于相同的数据类型 half(1) 或者 float(2)
+    /* !!!!! 数据类型注意事项 !!!!!*/
+
     /* init device 初始化设备 */
     std::cout << "Begin:init device:\n";
 
     cnrtDev_t dev;                 // 声明 设备变量
+    cnrtQueue_t queue = nullptr;   // 声明 队列
     cnnlHandle_t handle = nullptr; // 声明 句柄变量
-    cnrtQueue_t queue;             // 声明 队列
 
     unsigned int device_cnt;
 
@@ -570,8 +585,9 @@ int main(int, char **)
     shape_param.group_count = 1;  // 只用一个 group
     /* 初始化 data_type_param */
     DataTypeParam data_type_param;
-    data_type_param.input_dtype = cnnlDataType_t::CNNL_DTYPE_FLOAT;
-    data_type_param.weight_dtype = cnnlDataType_t::CNNL_DTYPE_FLOAT;
+    /* 注意input 和 wwight 的数据类型!!!必须为 int8/int16/int31 其中的一种 */
+    data_type_param.input_dtype = cnnlDataType_t::CNNL_DTYPE_INT16;
+    data_type_param.weight_dtype = cnnlDataType_t::CNNL_DTYPE_INT16;
     data_type_param.output_dtype = cnnlDataType_t::CNNL_DTYPE_FLOAT;
     // !!! 注意 这里数据的格式是 NHWC 不是 NCHW !!!
     data_type_param.layout = CNNL_LAYOUT_NHWC;
@@ -597,9 +613,9 @@ int main(int, char **)
     // input,
     // weight,
     // bias,
-    float input_data[] = {5, 1, 8, 1, 6, 4, 3, 8, 2, 6, 0, 6, 8, 5, 7, 4, 9, 6};
-    float weight_data[] = {1, 5, 7, 5, 4, 2, 1, 8, 3, 8, 6, 2, 4, 8, 5, 0, 9, 5};
-    float bias[] = {1.0};
+    int16_t input_data[] = {5, 1, 8, 1, 6, 4, 3, 8, 2, 6, 0, 6, 8, 5, 7, 4, 9, 6};
+    int16_t weight_data[] = {1, 5, 7, 5, 4, 2, 1, 8, 3, 8, 6, 2, 4, 8, 5, 0, 9, 5};
+    float bias[] = {1.0f};
 
     std::cout << "Begin::host memory malloc.\n";
     // 先不使用 定点量化 技术
@@ -608,14 +624,14 @@ int main(int, char **)
     std::cout << "input:[";
     for (int i = 0; i < shape_param.input.size(); i++)
     {
-        std::cout << convolution.input_data.host_data[i] << ",";
+        std::cout << ((int16_t *)(convolution.input_data.host_data))[i] << ",";
     }
     std::cout << "];\n";
 
     std::cout << "weight:[";
     for (int i = 0; i < shape_param.weight.size(); i++)
     {
-        std::cout << convolution.weight_data.host_data[i] << ",";
+        std::cout << ((int16_t *)(convolution.weight_data.host_data))[i] << ",";
     }
     std::cout << "];\n";
 
