@@ -102,11 +102,10 @@ struct DataTypeParam {
  */
 struct DataAddress {
   // 如果不使用 定点量化技术， 就不需要 cpu_data, fp_data，只需要 host 和 device
-  void *host_data = nullptr;              // host 数据
-  void *device_data = nullptr;            // 存储 host 数据的拷贝
+  float *host_data = nullptr;             // host 数据
+  float *device_data = nullptr;           // 存储 host 数据的拷贝
   void *quantized_device_data = nullptr;  // 存储量化后的 数据
   size_t mlu_size = 0;                    // 量化后数据的 size
-  size_t quantized_mlu_size = 0;          // 量化后数据的 size
   size_t fp_size = 0;  // 未量化数据的 size (host_data, device_data)
 };
 
@@ -156,7 +155,7 @@ void initDevice(cnrtDev_t &dev, cnrtQueue_t &queue, cnnlHandle_t &handle) {
   std::cout << "device count:" << device_cnt << std::endl;
   if (device_cnt <= 0) {
     std::cout << "There is no MLU device.\n";
-    return -1;
+    return;
   }
 
   CNRT_CHECK(cnrtGetDeviceHandle(&dev, 0));  // 获取设备 0 的句柄,存储在 dev 中
@@ -269,11 +268,11 @@ void initDescriptorAndWorkspace(cnnlHandle_t handle, Convolution &convolution,
       convolution.output_desc, convolution.bias_desc, convolution.conv_desc,
       convolution.algo, &(convolution.workspace_size)));
 
-  convolution.input_data.fp_size = shape_param.input.size() * sizeof(int16_t);
+  convolution.input_data.fp_size = shape_param.input.size() * sizeof(float);
   convolution.input_data.mlu_size =
       shape_param.input.size() * getDataSize(data_type_param.input_dtype);
 
-  convolution.weight_data.fp_size = shape_param.weight.size() * sizeof(int16_t);
+  convolution.weight_data.fp_size = shape_param.weight.size() * sizeof(float);
   convolution.weight_data.mlu_size =
       shape_param.weight.size() * getDataSize(data_type_param.weight_dtype);
 
@@ -294,9 +293,8 @@ void initDescriptorAndWorkspace(cnnlHandle_t handle, Convolution &convolution,
  * @param weight_data
  * @param bias_data
  */
-void initHostData(cnnlHandle_t &handle, Convolution &convolution,
-                  ShapeParam &shape_param, float *input_data,
-                  float *weight_data, float *bias_data) {
+void initHostData(Convolution &convolution, ShapeParam &shape_param,
+                  float *input_data, float *weight_data, float *bias_data) {
   // 申请空间
   convolution.input_data.host_data =
       (float *)malloc(convolution.input_data.fp_size);
@@ -312,9 +310,12 @@ void initHostData(cnnlHandle_t &handle, Convolution &convolution,
       (float *)malloc(convolution.output_data.fp_size);
 
   // 赋值
+  std::cout << "复制：\n";
   for (int i = 0; i < shape_param.input.size(); i++) {
     convolution.input_data.host_data[i] = input_data[i];
+    std::cout << convolution.input_data.host_data[i] << ",";
   }
+  std::cout << "\n";
 
   for (int i = 0; i < shape_param.weight.size(); i++) {
     convolution.weight_data.host_data[i] = weight_data[i];
@@ -339,45 +340,98 @@ void initHostData(cnnlHandle_t &handle, Convolution &convolution,
  * @param quantize_mode
  */
 // 输入的地址都是 device 端 的地址
-void quantiedData(cnnlHandle_t &handle, void *des, cnnlDataType_t des_type,
-                  void *src, cnnlDataType_t src_type, size_t size,
-                  DataShape &data_shape, cnnlTensorLayout_t &layout,
+void quantiedData(cnnlHandle_t &handle, cnrtQueue_t &queue,
+                  cnnlTensorDescriptor_t &des_desc, void *des,
+                  cnnlDataType_t des_type, void *src, cnnlDataType_t src_type,
+                  size_t size, DataShape &data_shape,
+                  cnnlTensorLayout_t &layout,
                   cnnlQuantizeMode_t quantize_mode) {
   if (des_type == src_type) {
-    CNRT_CHECK(cnrtMemcpy(
-      des, src,
-      size*getDataSize(des_type), CNRT_MEM_TRANS_DIR_DEV2DEV)));
+    CNRT_CHECK(cnrtMemcpy(des, src, size * getDataSize(des_type),
+                          CNRT_MEM_TRANS_DIR_DEV2DEV));
   } else if ((des_type == CNNL_DTYPE_INT8 || des_type == CNNL_DTYPE_INT16) &&
              src_type == CNNL_DTYPE_FLOAT) {
+    // cnnlSetTensorDescriptorPositionAndScale();
     // 1. 计算参数
-    int position = -1;
-    float scale = 1.0f;
-    int offset = 0;
+    // !!!! 注意 参数 position / scale / offset 的地址也要在 mlu 内存中 !!!
+    void *position = nullptr;
+    int *position_host = nullptr;
+    CNRT_CHECK(cnrtMalloc((void **)&position, sizeof(int32_t)));
+
+    position_host = (int *)malloc(sizeof(int));
+
+    void *scale = nullptr;
+    float *scale_host = nullptr;
+    CNRT_CHECK(cnrtMalloc((void **)&scale, sizeof(float)));
+    scale_host = (float *)malloc(sizeof(float));
+
+    void *offset = nullptr;
+    int *offset_host = nullptr;
+    CNRT_CHECK(cnrtMalloc((void **)&offset, sizeof(int32_t)));
+    offset_host = (int *)malloc(sizeof(int));
 
     size_t workspace_size = 0;
     void *workspace = nullptr;
-    cnnlTensorDescriptor_t des_desc;
+    // cnnlTensorDescriptor_t des_desc;
     cnnlTensorDescriptor_t src_desc;
 
     setTensorDesc(src_desc, data_shape, src_type, layout);
-    setTensorDesc(des_desc, data_shape, src_type, layout);
+
+    // setTensorDesc(des_desc, data_shape, des_type, layout);
 
     // 获取 workspace size
     CNNL_CHECK(
         cnnlGetQuantizeParamWorkspaceSize(handle, src_desc, &workspace_size));
 
-    CNRT_CHECK(cnrtMalloc((void **)(&workspace), workspace_size));
-    CNNL_CHECK(cnnlQuantizeParam(handle, quantize_mode, src_desc, src,
-                                 getDataSize(des_type), workspace,
-                                 workspace_size, &position, &scale, &offset));
+    if (workspace_size != 0) {
+      CNRT_CHECK(cnrtMalloc((void **)(&workspace), workspace_size));
+      CNRT_CHECK(cnrtMemset(workspace, 0, workspace_size));
+    }
+
+    CNNL_CHECK(cnnlQuantizeParam(handle, quantize_mode, src_desc, src, 16,
+                                 workspace, workspace_size, position, scale,
+                                 offset));
+
+    CNRT_CHECK(cnrtSyncQueue(queue));
+
+    std::cout << "workspace_size: " << workspace_size << "\n";
     // 2. 进行量化
-    cnnlQuantizeV2(handle, quantize_mode, src_desc, src, &position, &scale,
-                   &offset, des_desc, des);
+    CNNL_CHECK(cnnlQuantizeV2(handle, quantize_mode, src_desc, src, position,
+                              scale, offset, des_desc, des));
+
+    CNRT_CHECK(cnrtSyncQueue(queue));
+
+    CNRT_CHECK(cnrtMemcpyAsync(position_host, position, sizeof(int), queue,
+                               CNRT_MEM_TRANS_DIR_DEV2HOST));
+    CNRT_CHECK(cnrtSyncQueue(queue));
+
+    CNRT_CHECK(cnrtMemcpyAsync(scale_host, scale, sizeof(float), queue,
+                               CNRT_MEM_TRANS_DIR_DEV2HOST));
+    CNRT_CHECK(cnrtSyncQueue(queue));
+
+    CNRT_CHECK(cnrtMemcpyAsync(offset_host, offset, sizeof(int), queue,
+                               CNRT_MEM_TRANS_DIR_DEV2HOST));
+    CNRT_CHECK(cnrtSyncQueue(queue));
+
+    std::cout << "pos:" << *position_host << " scale:" << *scale_host
+              << " offset:" << *offset_host << "\n";
+
+    cnnlSetTensorDescriptorPositionScaleAndOffset(des_desc, *position_host,
+                                                  *scale_host, *offset_host);
+    // cnnlSetTensorDescriptorPositionAndScale(des_desc, *position_host,
+    //                                         *scale_host);
+    CNRT_CHECK(cnrtSyncQueue(queue));
 
     // 3. 释放资源
-    CNNL_CHECK(cnnlDestroyTensorDescriptor(src_desc));
-    CNNL_CHECK(cnnlDestroyTensorDescriptor(des_desc));
+    free(position_host);
+    free(scale_host);
+    free(offset_host);
 
+    CNNL_CHECK(cnnlDestroyTensorDescriptor(src_desc));
+    // CNNL_CHECK(cnnlDestroyTensorDescriptor(des_desc));
+    CNRT_CHECK(cnrtFree(position));
+    CNRT_CHECK(cnrtFree(scale));
+    CNRT_CHECK(cnrtFree(offset));
     CNRT_CHECK(cnrtFree(workspace));
 
   } else {
@@ -388,14 +442,17 @@ void quantiedData(cnnlHandle_t &handle, void *des, cnnlDataType_t des_type,
  * @brief 初始化device内存空间 包括未量化的内存空间 和 量化后的内存空间
  * @param convolution
  */
-void deviceMalloc(cnnlHandle_t &handle, Convolution &convolution,
-                  ShapeParam &shape_param) {
+void deviceMalloc(Convolution &convolution, ShapeParam &shape_param) {
   // 初始化 device 内存空间 并且 赋值为 0.0
+  std::cout << convolution.input_data.fp_size << " "
+            << convolution.input_data.mlu_size << "\n";
   CNRT_CHECK(cnrtMalloc((void **)(&convolution.input_data.device_data),
                         convolution.input_data.fp_size));
   CNRT_CHECK(cnrtMemset(convolution.input_data.device_data, 0,
                         convolution.input_data.fp_size));
 
+  // std::cout << convolution.input_data.fp_size << " "
+  // << convolution.input_data.mlu_size << "\n";
   CNRT_CHECK(
       cnrtMalloc((void **)(&convolution.input_data.quantized_device_data),
                  convolution.input_data.mlu_size));
@@ -426,7 +483,6 @@ void deviceMalloc(cnnlHandle_t &handle, Convolution &convolution,
                           convolution.bias_data.mlu_size));
   }
 
-  // 初始化 待量化的 数据的 描述符
   CNRT_CHECK(cnrtMalloc((void **)(&convolution.output_data.device_data),
                         convolution.output_data.fp_size));
   CNRT_CHECK(cnrtMemset(convolution.output_data.device_data, 0,
@@ -443,66 +499,39 @@ void deviceMalloc(cnnlHandle_t &handle, Convolution &convolution,
  * @brief 初始化 device 内存空间上的数据
  * @param convolution
  */
-void initDeviceData(Convolution &convolution, ShapeParam &shape_param,
+void initDeviceData(cnnlHandle_t &handle, cnrtQueue_t &queue,
+                    Convolution &convolution, ShapeParam &shape_param,
                     DataTypeParam &data_type_param) {
-  // 初始化 device 内存空间 并且 赋值为 0.0
-  CNRT_CHECK(cnrtMalloc((void **)(&convolution.input_data.device_data),
-                        convolution.input_data.mlu_size));
-  CNRT_CHECK(cnrtMemset(convolution.input_data.device_data, 0,
-                        convolution.input_data.mlu_size));
-
-  CNRT_CHECK(cnrtMalloc((void **)(&convolution.weight_data.device_data),
-                        convolution.weight_data.mlu_size));
-  CNRT_CHECK(cnrtMemset(convolution.weight_data.device_data, 0,
-                        convolution.weight_data.mlu_size));
-
-  CNRT_CHECK(cnrtMalloc((void **)(&convolution.output_data.device_data),
-                        convolution.output_data.mlu_size));
-  CNRT_CHECK(cnrtMemset(convolution.output_data.device_data, 0,
-                        convolution.output_data.mlu_size));
-
-  if (shape_param.has_bias) {
-    CNRT_CHECK(cnrtMalloc((void **)(&convolution.bias_data.device_data),
-                          convolution.bias_data.mlu_size));
-    CNRT_CHECK(cnrtMemset(convolution.bias_data.device_data, 0,
-                          convolution.bias_data.mlu_size));
-  }
-
-  if (convolution.workspace_size != 0) {
-    CNRT_CHECK(cnrtMalloc((void **)(&convolution.workspace),
-                          convolution.workspace_size));
-    CNRT_CHECK(
-        cnrtMemset(convolution.workspace, 0, convolution.workspace_size));
-  }
-
   CNRT_CHECK(cnrtMemcpy(
       convolution.input_data.device_data, convolution.input_data.host_data,
-      convolution.input_data.mlu_size, CNRT_MEM_TRANS_DIR_HOST2DEV));
+      convolution.input_data.fp_size, CNRT_MEM_TRANS_DIR_HOST2DEV));
 
   CNRT_CHECK(cnrtMemcpy(
       convolution.weight_data.device_data, convolution.weight_data.host_data,
-      convolution.weight_data.mlu_size, CNRT_MEM_TRANS_DIR_HOST2DEV));
+      convolution.weight_data.fp_size, CNRT_MEM_TRANS_DIR_HOST2DEV));
 
   if (shape_param.has_bias) {
     CNRT_CHECK(cnrtMemcpy(
         convolution.bias_data.device_data, convolution.bias_data.host_data,
-        convolution.bias_data.mlu_size, CNRT_MEM_TRANS_DIR_HOST2DEV));
+        convolution.bias_data.fp_size, CNRT_MEM_TRANS_DIR_HOST2DEV));
   }
 
   // 数据量化 包括 input, weight
   std::cout << "Begin: quantify data.\n";
-  quantiedData(handle, convolution.input_data.quantized_device_data,
+  quantiedData(handle, queue, convolution.input_desc,
+               convolution.input_data.quantized_device_data,
                data_type_param.input_dtype, convolution.input_data.device_data,
                cnnlDataType_t::CNNL_DTYPE_FLOAT, shape_param.input.size(),
                shape_param.input, data_type_param.layout,
-               cnnlQuantizeMode_t::CNNL_QUANTIZE_POSITION);
+               cnnlQuantizeMode_t::CNNL_QUANTIZE_POSITION_SCALE_OFFSET);
 
-  quantiedData(handle, convolution.weight_data.quantized_device_data,
+  quantiedData(handle, queue, convolution.weight_desc,
+               convolution.weight_data.quantized_device_data,
                data_type_param.weight_dtype,
                convolution.weight_data.device_data,
                cnnlDataType_t::CNNL_DTYPE_FLOAT, shape_param.weight.size(),
                shape_param.weight, data_type_param.layout,
-               cnnlQuantizeMode_t::CNNL_QUANTIZE_POSITION);
+               cnnlQuantizeMode_t::CNNL_QUANTIZE_POSITION_SCALE_OFFSET);
 
   std::cout << "End:quantify data.\n";
 }
@@ -555,9 +584,9 @@ void printResults(Convolution &conv, cnrtQueue_t &queue,
                   ShapeParam &shape_param) {
   std::cout << "----- Print Output -----\n";
   std::cout << "Begin copy data from device to host.\n";
-  CNRT_CHECK(cnrtMemcpyAsync(
-      conv.output_data.host_data, conv.output_data.device_data,
-      conv.output_data.fp_size, queue, CNRT_MEM_TRANS_DIR_DEV2HOST));
+  CNRT_CHECK(cnrtMemcpy(conv.output_data.host_data,
+                        conv.output_data.device_data, conv.output_data.fp_size,
+                        CNRT_MEM_TRANS_DIR_DEV2HOST));
   CNRT_CHECK(cnrtSyncQueue(queue));
   std::cout << "End copy data from device to host.\n";
   std::cout << "Output:[";
@@ -580,18 +609,17 @@ void freeDeviceHost(cnnlHandle_t &handle, Convolution &conv,
                     cnrtQueue_t &queue) {
   // free host space
   free(conv.input_data.host_data);
-  free(conv.input_data.fp_data);
-  free(conv.input_data.cpu_data);
+  // free(conv.input_data.device_data);
+
   free(conv.weight_data.host_data);
-  free(conv.weight_data.fp_data);
-  free(conv.weight_data.cpu_data);
+  // free(conv.weight_data.device_data);
+
   free(conv.output_data.host_data);
-  free(conv.output_data.fp_data);
-  free(conv.output_data.cpu_data);
+  // free(conv.output_data.device_data);
 
   if (conv.bias_data.host_data) {
     free(conv.bias_data.host_data);
-    free(conv.bias_data.fp_data);
+    // free(conv.bias_data.device_data);
   }
 
   // destory op and tensor desc
@@ -607,6 +635,11 @@ void freeDeviceHost(cnnlHandle_t &handle, Convolution &conv,
   CNRT_CHECK(cnrtFree(conv.input_data.device_data));
   CNRT_CHECK(cnrtFree(conv.weight_data.device_data));
   CNRT_CHECK(cnrtFree(conv.output_data.device_data));
+
+  CNRT_CHECK(cnrtFree(conv.input_data.quantized_device_data));
+  CNRT_CHECK(cnrtFree(conv.weight_data.quantized_device_data));
+  CNRT_CHECK(cnrtFree(conv.output_data.quantized_device_data));
+
   if (conv.bias_data.device_data != nullptr) {
     CNRT_CHECK(cnrtFree(conv.bias_data.device_data));
   }
@@ -680,8 +713,8 @@ int main(int, char **) {
   shape_param.kernel.dilation_w = 1;
 
   shape_param.pad = {1, 1, 1, 1};
-  shape_param.has_bias = true;  // 控制是否启用 bias
-  shape_param.group_count = 1;  // 只用一个 group
+  shape_param.has_bias = false;  // 控制是否启用 bias
+  shape_param.group_count = 1;   // 只用一个 group
   /* 初始化 data_type_param */
   DataTypeParam data_type_param;
   /* 注意input 和 wwight 的数据类型!!!必须为 int8/int16/int31 其中的一种 */
@@ -720,22 +753,32 @@ int main(int, char **) {
   // input,
   // weight,
   // bias,
-  float input_data[] = {5, 1, 8, 1, 6, 4, 3, 8, 2, 6, 0, 6, 8, 5, 7, 4, 9, 6};
+  float input_data[] = {5, 1, 8.0, 1.0, 6, 4, 3, 8, 2,
+                        6, 0, 6,   8,   5, 7, 4, 9, 6};
+
   float weight_data[] = {1, 5, 7, 5, 4, 2, 1, 8, 3, 8, 6, 2, 4, 8, 5, 0, 9, 5};
   float bias[] = {1.0f};
+
+  for (int i = 0; i < 18; i++) {
+    input_data[i] = 0 + ((i % 2 == 0) ? (-1) : (1));
+  }
+  // for (int i = 0; i < 18; i++) {
+  //   weight_data[i] = 2.0;
+  // }
+  // input_data[0] = 1;
 
   std::cout << "Begin::host memory malloc.\n";
 
   initHostData(convolution, shape_param, input_data, weight_data, bias);
   std::cout << "input:[";
   for (int i = 0; i < shape_param.input.size(); i++) {
-    std::cout << ((int16_t *)(convolution.input_data.host_data))[i] << ",";
+    std::cout << convolution.input_data.host_data[i] << ",";
   }
   std::cout << "];\n";
 
   std::cout << "weight:[";
   for (int i = 0; i < shape_param.weight.size(); i++) {
-    std::cout << ((int16_t *)(convolution.weight_data.host_data))[i] << ",";
+    std::cout << convolution.weight_data.host_data[i] << ",";
   }
   std::cout << "];\n";
 
@@ -745,14 +788,14 @@ int main(int, char **) {
 
   /* 申请数据空间 */
   deviceMalloc(convolution, shape_param);
-
+  std::cout << " complished device malloc.\n";
   /* 初始化device端数据，并且对数据进行 定点量化 */
-  initDeviceData(convolution, shape_param, data_type_param);
-
+  initDeviceData(handle, queue, convolution, shape_param, data_type_param);
+  // 量化数据后 还需要设置 描述符 desc 的 pos, scale 等参数
   std::cout << "End::device memory malloc.\n";
 
   convolutionComputeDevice(handle, queue, convolution);
-
+  // cnrtCastDataType();
   printResults(convolution, queue, shape_param);
   // cnrtDestroyQueue(pQueue); // 销毁队列
   // cnrtDestroy();            // 销毁运行环境, 与 cnrtInit() 匹配
