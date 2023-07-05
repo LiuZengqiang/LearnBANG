@@ -1,0 +1,127 @@
+/* quantize_v2_test */
+/*
+ * A test which shows how to run quantize op when quantization parameters
+ * are inputted from MLU device.
+ *
+ * define tensors: input and output
+ * input size: 64 x 3 x 224 x 224
+ * input data type: float32
+ * output size: 64 x 3 x 224 x 224
+ * input data type: int16
+ */
+
+int quantize_v2_test() {
+  // get current device 0
+  int dev;
+  CNRT_CHECK(cnrtGetDevice(&dev));
+  CNRT_CHECK(cnrtSetDevice(dev));
+
+  // create queue
+  cnrtQueue_t queue;
+  CNRT_CHECK(cnrtQueueCreate(&queue));
+
+  // create handle and bind queue
+  cnnlHandle_t handle;
+  cnnlCreate(&handle);
+  cnnlSetQueue(handle, queue);
+
+  // prepare input and output
+  const int dimension_num = 4;
+  const int ni = 64, ci = 3, hi = 224, wi = 224;
+  const int no = 64, co = 3, ho = 224, wo = 224;
+  size_t input_count = ni * ci * hi * wi;
+  size_t output_count = no * co * ho * wo;
+  size_t size_input = input_count * sizeof(float);
+  size_t size_output = output_count * sizeof(int16_t);
+  cnnlDataType_t input_data_type = CNNL_DTYPE_FLOAT;
+  cnnlDataType_t output_data_type = CNNL_DTYPE_INT16;
+
+  // prepare desc of input
+  int input_dimension[dimension_num] = {ni, ci, hi, wi};
+  cnnlTensorDescriptor_t desc_input;
+  cnnlCreateTensorDescriptor(&desc_input);
+  cnnlSetTensorDescriptor(desc_input, CNNL_LAYOUT_NCHW, input_data_type,
+                          dimension_num, input_dimension);
+
+  // prepare desc of output
+  int output_dimension[dimension_num] = {no, co, ho, wo};
+  cnnlTensorDescriptor_t desc_output;
+  cnnlCreateTensorDescriptor(&desc_output);
+  cnnlSetTensorDescriptor(desc_output, CNNL_LAYOUT_NCHW, output_data_type,
+                          dimension_num, output_dimension);
+
+  // prepare cpu buffer and origin data
+  float *input_cpu_data = (float *)malloc(input_count * sizeof(float));
+  int16_t *output_cpu_data = (int16_t *)malloc(output_count * sizeof(int16_t));
+  unsigned int seed = time(0);
+  for (int i = 0; i < input_count; ++i) {
+    input_cpu_data[i] = ((rand_r(&seed) % 100 / 100.0) - 0.5) / 2;
+  }
+
+  // prepare position, scale, and quantize mode
+  // the position and scale just for a sample demonstration here
+  cnnlQuantizeMode_t mode = CNNL_QUANTIZE_POSITION_SCALE;
+  int position = -9;
+  float scale = 1.123f;
+
+  // malloc mlu buffer
+  void *input_mlu_ptr = nullptr;
+  void *output_mlu_ptr = nullptr;
+  void *position_mlu_ptr = nullptr;
+  void *scale_mlu_ptr = nullptr;
+  CNRT_CHECK(cnrtMalloc((void **)&input_mlu_ptr, size_input));
+  CNRT_CHECK(cnrtMalloc((void **)&output_mlu_ptr, size_output));
+  CNRT_CHECK(cnrtMalloc((void **)&position_mlu_ptr, sizeof(int32_t)));
+  CNRT_CHECK(cnrtMalloc((void **)&scale_mlu_ptr, sizeof(float)));
+
+  // copy input data to mlu device
+  CNRT_CHECK(cnrtMemcpy(input_mlu_ptr, input_cpu_data, size_input,
+                        CNRT_MEM_TRANS_DIR_HOST2DEV));
+  // copy quantization parameters to mlu device
+  CNRT_CHECK(cnrtMemcpy(position_mlu_ptr, &position, sizeof(int32_t),
+                        CNRT_MEM_TRANS_DIR_HOST2DEV));
+  CNRT_CHECK(cnrtMemcpy(scale_mlu_ptr, &scale, sizeof(float),
+                        CNRT_MEM_TRANS_DIR_HOST2DEV));
+
+  // cnnlQuantizeV2 compute
+  CNNL_CHECK(cnnlQuantizeV2(handle, mode, desc_input, input_mlu_ptr,
+                            position_mlu_ptr, scale_mlu_ptr, nullptr,
+                            desc_output, output_mlu_ptr));
+
+  // wait for computing task over
+  cnrtQueueSync(queue);
+
+  // copy output data to cpu
+  CNRT_CHECK(cnrtMemcpy(output_cpu_data, output_mlu_ptr, size_output,
+                        CNRT_MEM_TRANS_DIR_DEV2HOST));
+
+  // free mlu buffer
+  if (input_mlu_ptr) {
+    CNRT_CHECK(cnrtFree(input_mlu_ptr));
+  }
+  if (output_mlu_ptr) {
+    CNRT_CHECK(cnrtFree(output_mlu_ptr));
+  }
+  if (position_mlu_ptr) {
+    CNRT_CHECK(cnrtFree(position_mlu_ptr));
+  }
+  if (scale_mlu_ptr) {
+    CNRT_CHECK(cnrtFree(scale_mlu_ptr));
+  }
+
+  // free cpu buffer
+  free(input_cpu_data);
+  free(output_cpu_data);
+
+  // free input and ouput descriptor
+  cnnlDestroyTensorDescriptor(desc_input);
+  cnnlDestroyTensorDescriptor(desc_output);
+
+  // free handle
+  cnnlDestroy(handle);
+
+  // free quene
+  cnrtQueueDestroy(queue);
+
+  return 0;
+}

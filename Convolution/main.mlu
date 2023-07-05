@@ -355,20 +355,19 @@ void quantiedData(cnnlHandle_t &handle, cnrtQueue_t &queue,
     // 1. 计算参数
     // !!!! 注意 参数 position / scale / offset 的地址也要在 mlu 内存中 !!!
     void *position = nullptr;
-    int *position_host = nullptr;
+    // int *position_host = nullptr;
     CNRT_CHECK(cnrtMalloc((void **)&position, sizeof(int32_t)));
-
-    position_host = (int *)malloc(sizeof(int));
+    // position_host = (int *)malloc(sizeof(int));
 
     void *scale = nullptr;
-    float *scale_host = nullptr;
+    // float *scale_host = nullptr;
     CNRT_CHECK(cnrtMalloc((void **)&scale, sizeof(float)));
-    scale_host = (float *)malloc(sizeof(float));
+    // scale_host = (float *)malloc(sizeof(float));
 
     void *offset = nullptr;
-    int *offset_host = nullptr;
+    // int *offset_host = nullptr;
     CNRT_CHECK(cnrtMalloc((void **)&offset, sizeof(int32_t)));
-    offset_host = (int *)malloc(sizeof(int));
+    // offset_host = (int *)malloc(sizeof(int));
 
     size_t workspace_size = 0;
     void *workspace = nullptr;
@@ -401,31 +400,31 @@ void quantiedData(cnnlHandle_t &handle, cnrtQueue_t &queue,
 
     CNRT_CHECK(cnrtSyncQueue(queue));
 
-    CNRT_CHECK(cnrtMemcpyAsync(position_host, position, sizeof(int), queue,
-                               CNRT_MEM_TRANS_DIR_DEV2HOST));
-    CNRT_CHECK(cnrtSyncQueue(queue));
+    // CNRT_CHECK(cnrtMemcpyAsync(position_host, position, sizeof(int), queue,
+    //                            CNRT_MEM_TRANS_DIR_DEV2HOST));
+    // CNRT_CHECK(cnrtSyncQueue(queue));
 
-    CNRT_CHECK(cnrtMemcpyAsync(scale_host, scale, sizeof(float), queue,
-                               CNRT_MEM_TRANS_DIR_DEV2HOST));
-    CNRT_CHECK(cnrtSyncQueue(queue));
+    // CNRT_CHECK(cnrtMemcpyAsync(scale_host, scale, sizeof(float), queue,
+    //                            CNRT_MEM_TRANS_DIR_DEV2HOST));
+    // CNRT_CHECK(cnrtSyncQueue(queue));
 
-    CNRT_CHECK(cnrtMemcpyAsync(offset_host, offset, sizeof(int), queue,
-                               CNRT_MEM_TRANS_DIR_DEV2HOST));
-    CNRT_CHECK(cnrtSyncQueue(queue));
+    // CNRT_CHECK(cnrtMemcpyAsync(offset_host, offset, sizeof(int), queue,
+    //                            CNRT_MEM_TRANS_DIR_DEV2HOST));
+    // CNRT_CHECK(cnrtSyncQueue(queue));
 
-    std::cout << "pos:" << *position_host << " scale:" << *scale_host
-              << " offset:" << *offset_host << "\n";
+    // std::cout << "pos:" << *position_host << " scale:" << *scale_host
+    //           << " offset:" << *offset_host << "\n";
 
-    cnnlSetTensorDescriptorPositionScaleAndOffset(des_desc, *position_host,
-                                                  *scale_host, *offset_host);
+    // cnnlSetTensorDescriptorPositionScaleAndOffset(des_desc, *position_host,
+    //                                               *scale_host, *offset_host);
     // cnnlSetTensorDescriptorPositionAndScale(des_desc, *position_host,
     //                                         *scale_host);
     CNRT_CHECK(cnrtSyncQueue(queue));
 
     // 3. 释放资源
-    free(position_host);
-    free(scale_host);
-    free(offset_host);
+    // free(position_host);
+    // free(scale_host);
+    // free(offset_host);
 
     CNNL_CHECK(cnnlDestroyTensorDescriptor(src_desc));
     // CNNL_CHECK(cnnlDestroyTensorDescriptor(des_desc));
@@ -765,11 +764,11 @@ int main(int, char **) {
   // for (int i = 0; i < 18; i++) {
   //   weight_data[i] = 2.0;
   // }
-  // input_data[0] = 1;
 
   std::cout << "Begin::host memory malloc.\n";
 
   initHostData(convolution, shape_param, input_data, weight_data, bias);
+
   std::cout << "input:[";
   for (int i = 0; i < shape_param.input.size(); i++) {
     std::cout << convolution.input_data.host_data[i] << ",";
