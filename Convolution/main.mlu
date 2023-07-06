@@ -157,7 +157,7 @@ void initDevice(cnrtDev_t &dev, cnrtQueue_t &queue, cnnlHandle_t &handle) {
     std::cout << "There is no MLU device.\n";
     return;
   }
-
+  
   CNRT_CHECK(cnrtGetDeviceHandle(&dev, 0));  // 获取设备 0 的句柄,存储在 dev 中
   CNRT_CHECK(cnrtSetCurrentDevice(
       dev));  // 设置当前线程 使用的设备句柄 (据此设置该线程使用的设备)
@@ -419,7 +419,7 @@ void quantiedData(cnnlHandle_t &handle, cnrtQueue_t &queue,
     //                                               *scale_host, *offset_host);
     // cnnlSetTensorDescriptorPositionAndScale(des_desc, *position_host,
     //                                         *scale_host);
-    CNRT_CHECK(cnrtSyncQueue(queue));
+    // CNRT_CHECK(cnrtSyncQueue(queue));
 
     // 3. 释放资源
     // free(position_host);

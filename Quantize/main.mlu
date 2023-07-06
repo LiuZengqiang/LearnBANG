@@ -9,21 +9,50 @@
  * output size: 64 x 3 x 224 x 224
  * input data type: int16
  */
+#include <bang.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
 
-int quantize_v2_test() {
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <string>
+
+#include "cnnl.h"
+#include "cnrt.h"
+
+int main() {
   // get current device 0
-  int dev;
-  CNRT_CHECK(cnrtGetDevice(&dev));
-  CNRT_CHECK(cnrtSetDevice(dev));
+  unsigned int device_cnt;
+  cnrtDev_t dev;                  // 声明 设备变量
+  cnrtQueue_t queue = nullptr;    // 声明 队列
+  cnnlHandle_t handle = nullptr;  // 声明 句柄变量
+  /* init device 初始化设备 */
+  std::cout << "Begin:init device:\n";
+  CNRT_CHECK(cnrtInit(
+      0));  // 初始化运行环境, 0 表示初始化实际设备, 1 表示初始化虚拟设备
+  CNRT_CHECK(
+      cnrtGetDeviceCount(&device_cnt));  // 获取设备个数 必须在 cnrtInit(0)
+                                         // 之后才能正确获取设备个数
+  std::cout << "device count:" << device_cnt << std::endl;
+  if (device_cnt <= 0) {
+    std::cout << "There is no MLU device.\n";
+    return 0;
+  }
 
-  // create queue
-  cnrtQueue_t queue;
-  CNRT_CHECK(cnrtQueueCreate(&queue));
+  CNRT_CHECK(cnrtGetDeviceHandle(&dev, 0));  // 获取设备 0 的句柄,存储在 dev 中
+  CNRT_CHECK(cnrtSetCurrentDevice(
+      dev));  // 设置当前线程 使用的设备句柄 (据此设置该线程使用的设备)
 
-  // create handle and bind queue
-  cnnlHandle_t handle;
-  cnnlCreate(&handle);
-  cnnlSetQueue(handle, queue);
+  CNRT_CHECK(cnrtCreateQueue(&queue));  // 定义一个 队列变量 pQueue
+
+  cnnlCreate(&handle);  // 创建 cnnl 句柄，此句柄会默认与
+                        // cnrtSetCurrentDevice(dev) 中的设备(设备0)绑定
+  cnnlSetQueue(handle,
+               queue);  // 将队列 pQueue 绑定到 handle 中. 用于调用
+                        // cnnl 函数时，确定需要用到的 队列 queue
+  std::cout << "End:init device:\n";
 
   // prepare input and output
   const int dimension_num = 4;
@@ -84,12 +113,11 @@ int quantize_v2_test() {
                         CNRT_MEM_TRANS_DIR_HOST2DEV));
 
   // cnnlQuantizeV2 compute
-  CNNL_CHECK(cnnlQuantizeV2(handle, mode, desc_input, input_mlu_ptr,
-                            position_mlu_ptr, scale_mlu_ptr, nullptr,
-                            desc_output, output_mlu_ptr));
+  cnnlQuantizeV2(handle, mode, desc_input, input_mlu_ptr, position_mlu_ptr,
+                 scale_mlu_ptr, nullptr, desc_output, output_mlu_ptr);
 
   // wait for computing task over
-  cnrtQueueSync(queue);
+  cnrtSyncQueue(queue);
 
   // copy output data to cpu
   CNRT_CHECK(cnrtMemcpy(output_cpu_data, output_mlu_ptr, size_output,
@@ -121,7 +149,8 @@ int quantize_v2_test() {
   cnnlDestroy(handle);
 
   // free quene
-  cnrtQueueDestroy(queue);
+  // cnrtQueueDestroy(queue);
+  CNRT_CHECK(cnrtDestroyQueue(queue));
 
   return 0;
 }
