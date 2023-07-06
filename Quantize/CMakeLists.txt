@@ -1,10 +1,11 @@
 cmake_minimum_required(VERSION 3.0.0)
-project(MultiAdd VERSION 0.1.0 LANGUAGES C CXX)
+project(LearnBANG-Quantize VERSION 0.1.0 LANGUAGES C CXX)
 
 
 # 设置 NEUWARE_HOME 变量
 set(NEUWARE_HOME "/usr/local/neuware")
-
+# 设置使用 c++ 11 版本
+set(CMAKE_CXX_STANDARD 17)
 #include_directories("${PROJECT_SOURCE_DIR}/include")
 
 # 如果存在 NEUWARE_HOME 那么就设置相应的 头文件目录、库文件目录
@@ -14,6 +15,7 @@ if(EXISTS ${NEUWARE_HOME})
   link_directories("${NEUWARE_HOME}/lib64")
   link_directories("${NEUWARE_HOME}/lib")
   set(NEUWARE_ROOT_DIR "${NEUWARE_HOME}")
+  
 else()
   message(FATAL_ERROR "NEUWARE directory cannot be found, refer README.md to prepare NEUWARE_HOME environment.")
 endif()
@@ -41,15 +43,16 @@ else()
   set(BANG_CNCC_FLAGS "${BANG_CNCC_FLAGS} -fPIC -Wall")
   #set(BANG_CNCC_FLAGS "${BANG_CNCC_FLAGS} --bang-mlu-arch=mtp_220")
   set(BANG_CNCC_FLAGS "${BANG_CNCC_FLAGS} --bang-mlu-arch=mtp_270")
+  # 设置 CNCC 的 c++ 版本
+  set(BANG_CNCC_FLAGS "${BANG_CNCC_FLAGS} -std=c++17")
   #set(BANG_CNCC_FLAGS "${BANG_CNCC_FLAGS} --bang-mlu-arch=mtp_290")
   #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -L/usr/local/neuware/lib64/ -lcnrt")
   set(BANG_EXIST ON)
 endif()
 
 # 使用 cncc 编译器编译 main.mlu
-bang_add_executable(MultiAdd main.mlu)
+bang_add_executable(LearnBANG-Quantize main.mlu)
 
-# 链接需要用的到 cnrt 库
-#target_link_libraries(MultiAdd cnrt pthread)
-target_link_libraries(MultiAdd cnrt)
-
+# 链接需要用的到 cnrt cnnl 库
+#target_link_libraries(LearnBANG-Quantize cnrt pthread)
+target_link_libraries(LearnBANG-Quantize cnrt cnnl)

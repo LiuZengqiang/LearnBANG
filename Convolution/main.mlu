@@ -355,14 +355,14 @@ void quantiedData(cnnlHandle_t &handle, cnrtQueue_t &queue,
     // 1. 计算参数
     // !!!! 注意 参数 position / scale / offset 的地址也要在 mlu 内存中 !!!
     void *position = nullptr;
-    // int *position_host = nullptr;
+    int *position_host = nullptr;
     CNRT_CHECK(cnrtMalloc((void **)&position, sizeof(int32_t)));
-    // position_host = (int *)malloc(sizeof(int));
+    position_host = (int *)malloc(sizeof(int));
 
     void *scale = nullptr;
-    // float *scale_host = nullptr;
+    float *scale_host = nullptr;
     CNRT_CHECK(cnrtMalloc((void **)&scale, sizeof(float)));
-    // scale_host = (float *)malloc(sizeof(float));
+    scale_host = (float *)malloc(sizeof(float));
 
     void *offset = nullptr;
     // int *offset_host = nullptr;
@@ -400,13 +400,15 @@ void quantiedData(cnnlHandle_t &handle, cnrtQueue_t &queue,
 
     CNRT_CHECK(cnrtSyncQueue(queue));
 
-    // CNRT_CHECK(cnrtMemcpyAsync(position_host, position, sizeof(int), queue,
-    //                            CNRT_MEM_TRANS_DIR_DEV2HOST));
-    // CNRT_CHECK(cnrtSyncQueue(queue));
+    CNRT_CHECK(cnrtMemcpyAsync(position_host, position, sizeof(int), queue,
+                               CNRT_MEM_TRANS_DIR_DEV2HOST));
+    CNRT_CHECK(cnrtSyncQueue(queue));
 
-    // CNRT_CHECK(cnrtMemcpyAsync(scale_host, scale, sizeof(float), queue,
-    //                            CNRT_MEM_TRANS_DIR_DEV2HOST));
-    // CNRT_CHECK(cnrtSyncQueue(queue));
+    CNRT_CHECK(cnrtMemcpyAsync(scale_host, scale, sizeof(float), queue,
+                               CNRT_MEM_TRANS_DIR_DEV2HOST));
+    CNRT_CHECK(cnrtSyncQueue(queue));
+
+    std::cout << *position_host << "----" << *scale_host << "\n";
 
     // CNRT_CHECK(cnrtMemcpyAsync(offset_host, offset, sizeof(int), queue,
     //                            CNRT_MEM_TRANS_DIR_DEV2HOST));
@@ -417,13 +419,13 @@ void quantiedData(cnnlHandle_t &handle, cnrtQueue_t &queue,
 
     // cnnlSetTensorDescriptorPositionScaleAndOffset(des_desc, *position_host,
     //                                               *scale_host, *offset_host);
-    // cnnlSetTensorDescriptorPositionAndScale(des_desc, *position_host,
-    //                                         *scale_host);
-    CNRT_CHECK(cnrtSyncQueue(queue));
+    cnnlSetTensorDescriptorPositionAndScale(des_desc, *position_host,
+                                            *scale_host);
+    // CNRT_CHECK(cnrtSyncQueue(queue));
 
     // 3. 释放资源
-    // free(position_host);
-    // free(scale_host);
+    free(position_host);
+    free(scale_host);
     // free(offset_host);
 
     CNNL_CHECK(cnnlDestroyTensorDescriptor(src_desc));
@@ -522,7 +524,15 @@ void initDeviceData(cnnlHandle_t &handle, cnrtQueue_t &queue,
                data_type_param.input_dtype, convolution.input_data.device_data,
                cnnlDataType_t::CNNL_DTYPE_FLOAT, shape_param.input.size(),
                shape_param.input, data_type_param.layout,
-               cnnlQuantizeMode_t::CNNL_QUANTIZE_POSITION_SCALE_OFFSET);
+               cnnlQuantizeMode_t::CNNL_QUANTIZE_POSITION_SCALE);
+
+  int16_t *t = (int16_t *)malloc(sizeof(int16_t));
+  CNRT_CHECK(cnrtMemcpy(t, convolution.input_data.quantized_device_data,
+                        sizeof(int16_t), CNRT_MEM_TRANS_DIR_DEV2HOST));
+  CNRT_CHECK(cnrtSyncQueue(queue));
+  std::cout << *t << "\n";
+
+  free(t);
 
   quantiedData(handle, queue, convolution.weight_desc,
                convolution.weight_data.quantized_device_data,
@@ -530,7 +540,7 @@ void initDeviceData(cnnlHandle_t &handle, cnrtQueue_t &queue,
                convolution.weight_data.device_data,
                cnnlDataType_t::CNNL_DTYPE_FLOAT, shape_param.weight.size(),
                shape_param.weight, data_type_param.layout,
-               cnnlQuantizeMode_t::CNNL_QUANTIZE_POSITION_SCALE_OFFSET);
+               cnnlQuantizeMode_t::CNNL_QUANTIZE_POSITION_SCALE);
 
   std::cout << "End:quantify data.\n";
 }
@@ -758,9 +768,9 @@ int main(int, char **) {
   float weight_data[] = {1, 5, 7, 5, 4, 2, 1, 8, 3, 8, 6, 2, 4, 8, 5, 0, 9, 5};
   float bias[] = {1.0f};
 
-  for (int i = 0; i < 18; i++) {
-    input_data[i] = 0 + ((i % 2 == 0) ? (-1) : (1));
-  }
+  // for (int i = 0; i < 18; i++) {
+  //   input_data[i] = 0 + ((i % 2 == 0) ? (-1) : (1));
+  // }
   // for (int i = 0; i < 18; i++) {
   //   weight_data[i] = 2.0;
   // }
