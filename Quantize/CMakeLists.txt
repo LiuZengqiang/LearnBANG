@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.0.0)
-project(LearnBANG-Convolution VERSION 0.1.0 LANGUAGES C CXX)
+project(LearnBANG-Quantize VERSION 0.1.0 LANGUAGES C CXX)
 
 
 # 设置 NEUWARE_HOME 变量
 set(NEUWARE_HOME "/usr/local/neuware")
 # 设置使用 c++ 11 版本
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 #include_directories("${PROJECT_SOURCE_DIR}/include")
 
 # 如果存在 NEUWARE_HOME 那么就设置相应的 头文件目录、库文件目录
@@ -51,9 +51,8 @@ else()
 endif()
 
 # 使用 cncc 编译器编译 main.mlu
-bang_add_executable(LearnBANG-Convolution main.mlu)
+bang_add_executable(LearnBANG-Quantize main.mlu)
 
 # 链接需要用的到 cnrt cnnl 库
-#target_link_libraries(LearnBANG-Convolution cnrt pthread)
-target_link_libraries(LearnBANG-Convolution cnrt cnnl)
-
+#target_link_libraries(LearnBANG-Quantize cnrt pthread)
+target_link_libraries(LearnBANG-Quantize cnrt cnnl)
