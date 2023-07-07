@@ -2,7 +2,10 @@
  * @file main.cpp
  * @author liuzengqiang
  * @brief 卷积算子示例，包括对 input 和 weight 进行 定点量化操作
- * ref:samples/cnnl/convolution.sample & Cambricon CNNL 用户手册
+ * cnnlConvolutionForward 算子暂时只使用 有缩放系数量化，使用 非对称量化
+ * 会出错，暂时未查清出错原因
+ * ref:samples/cnnl/convolution.sample & Cambricon
+ * CNNL 用户手册
  *
  * Input(NHWC)(1*3*3*2): [[[[5, 1], [8, 1], [6, 4]],
  *                       [[3, 8], [2,6], [0, 6]],
@@ -242,8 +245,10 @@ void initDescriptorAndWorkspace(cnnlHandle_t handle, Convolution &convolution,
   // 这是 进行卷积运算的数据的描述符，是量化后的 input/weight
   setTensorDesc(convolution.input_desc, shape_param.input,
                 data_type_param.input_dtype, data_type_param.layout);
+
   setTensorDesc(convolution.weight_desc, shape_param.weight,
                 data_type_param.weight_dtype, data_type_param.layout);
+
   setTensorDesc(convolution.output_desc, shape_param.output,
                 data_type_param.output_dtype, data_type_param.layout);
 
@@ -396,8 +401,9 @@ void quantiedData(cnnlHandle_t &handle, cnrtQueue_t &queue,
     CNRT_CHECK(cnrtSyncQueue(queue));
 
     // 2. 进行量化
-    CNNL_CHECK(cnnlQuantizeV2(handle, quantize_mode, src_desc, src, position,
-                              scale, offset, des_desc, des));
+    // CNNL_CHECK(cnnlQuantizeV2(handle, quantize_mode, src_desc, src, position,
+    //                           scale, offset, des_desc, des));
+
     CNRT_CHECK(cnrtSyncQueue(queue));
 
     // 将量化参数 拷贝到 host 端
@@ -417,10 +423,14 @@ void quantiedData(cnnlHandle_t &handle, cnrtQueue_t &queue,
     //           << " offset:" << *offset_host << "\n";
 
     // 设置 des_desc (目标数据描述符) 的 定点量化参数
-    cnnlSetTensorDescriptorPositionScaleAndOffset(des_desc, *position_host,
-                                                  *scale_host, *offset_host);
-    // cnnlSetTensorDescriptorPositionAndScale(des_desc, *position_host,
-    //                                         *scale_host);
+    // CNNL_CHECK(cnnlSetTensorDescriptorPositionScaleAndOffset(
+    //     des_desc, *position_host, *scale_host, *offset_host));
+    CNNL_CHECK(cnnlSetTensorDescriptorPositionAndScale(des_desc, *position_host,
+                                                       *scale_host));
+
+    CNRT_CHECK(cnrtSyncQueue(queue));
+    CNNL_CHECK(
+        cnnlQuantizeV1(handle, quantize_mode, src_desc, src, des_desc, des));
     CNRT_CHECK(cnrtSyncQueue(queue));
 
     // 3. 释放资源
@@ -519,7 +529,7 @@ void initDeviceData(cnnlHandle_t &handle, cnrtQueue_t &queue,
                data_type_param.input_dtype, convolution.input_data.device_data,
                cnnlDataType_t::CNNL_DTYPE_FLOAT, shape_param.input.size(),
                shape_param.input, data_type_param.layout,
-               cnnlQuantizeMode_t::CNNL_QUANTIZE_POSITION_SCALE_OFFSET);
+               cnnlQuantizeMode_t::CNNL_QUANTIZE_POSITION_SCALE);
 
   // 对 weight 进行定点量化
   quantiedData(handle, queue, convolution.weight_desc,
@@ -528,7 +538,7 @@ void initDeviceData(cnnlHandle_t &handle, cnrtQueue_t &queue,
                convolution.weight_data.device_data,
                cnnlDataType_t::CNNL_DTYPE_FLOAT, shape_param.weight.size(),
                shape_param.weight, data_type_param.layout,
-               cnnlQuantizeMode_t::CNNL_QUANTIZE_POSITION_SCALE_OFFSET);
+               cnnlQuantizeMode_t::CNNL_QUANTIZE_POSITION_SCALE);
 
   std::cout << "End:quantify data.\n";
 }
@@ -542,7 +552,6 @@ void initDeviceData(cnnlHandle_t &handle, cnrtQueue_t &queue,
 void convolutionComputeDevice(cnnlHandle_t &handle, cnrtQueue_t &queue,
                               Convolution &conv) {
   std::cout << "Begin compute.\n";
-
   CNNL_CHECK(cnnlConvolutionForward(
       handle, conv.conv_desc, conv.algo, nullptr, conv.input_desc,
       conv.input_data.quantized_device_data, conv.weight_desc,
@@ -725,6 +734,7 @@ int main(int, char **) {
   std::cout << "End::device memory malloc.\n";
 
   convolutionComputeDevice(handle, queue, convolution);
+
   printResults(convolution, queue, shape_param);
 
   /* 释放申请的 dev, handle, queue 和 内存资源 */
