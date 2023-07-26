@@ -1,4 +1,4 @@
-## LearnBANG  
+## LearnCNNL  
 
 ### Dependencies  
 
@@ -7,6 +7,7 @@ Cambrian MLU 270
 * Software:  
 cncc v2.15.2  
 cnrt 4.10.1  
+cnnl 1.30
 
 ### Examples:  
 #### Run ``MultiAdd``:  
